@@ -39,7 +39,7 @@ This repo is intentionally broad. It reflects the range of methods I've applied 
 | File | Description |
 |------|-------------|
 | `Data_cleanup.py` | Preprocessing utilities for large biological datasets — handling missing values, format standardization, QC |
-| `Cluster_Separation.py` | Cluster analysis and separation metrics for high-dimensional biological data |
+| `protein_disorder_pipeline.py` | Protein disorder analysis and separation metrics for high-dimensional biological data |
 
 ---
 
