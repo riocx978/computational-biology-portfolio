@@ -8,37 +8,25 @@ This repo is intentionally broad. It reflects the range of methods I've applied 
 
 ## What's here
 
-### 🧬 Mendelian Randomization
-| File | Description |
-|------|-------------|
-| `MendelianRandomization.R` | Two-sample MR pipeline — IV selection, harmonization, IVW / MR-Egger / Weighted Median |
-| `MR_Periodontitis_GERD.Rmd` | MR analysis of the causal relationship between periodontitis and GERD; rendered as a reproducible report |
-
-> Full thesis MR code (periodontal disease, blood metabolites, lifestyle factors) lives in the dedicated [Mendelian-Randomization](https://github.com/riocx978/Mendelian-Randomization) repo.
-
----
-
 ### 📊 Differential Gene Expression
 | File | Description |
 |------|-------------|
-| `DiffGeneExpAnalysis1.R` | DEG analysis pipeline using DESeq2 — normalization, statistical testing, volcano plots |
-| `DiffGeneExpAnalysis2.R` | Extended DEG workflow with additional visualization and filtering steps |
+| `celegans_deg_analysis.R` | DEG analysis pipeline using DESeq2 — normalization, statistical testing, volcano plots | Extended DEG workflow with additional visualization and filtering steps |
 
 ---
 
 ### 🤖 Machine Learning & Statistical Modeling
 | File | Description |
 |------|-------------|
-| `MultipleML_ModelswithCV.R` | Benchmarks multiple ML models (random forest, SVM, logistic regression) with cross-validation |
-| `CrossValidationModels.R` | Cross-validation framework for model selection and performance evaluation |
-| `LogisticRegression_LDAModels.R` | Logistic regression and LDA applied to biological classification problems |
+| `heart_disease_prediction.R` | Benchmarks multiple ML models (random forest, SVM, logistic regression) with cross-validation |
+| `covid_viral_classification.R` | Cross-validation framework for model selection and performance evaluation |
+| `viral_status_classification.R` | Logistic regression and LDA applied to biological classification problems |
 
 ---
 
 ### 🐍 Python: Data Processing
 | File | Description |
 |------|-------------|
-| `Data_cleanup.py` | Preprocessing utilities for large biological datasets — handling missing values, format standardization, QC |
 | `protein_disorder_pipeline.py` | Protein disorder analysis and separation metrics for high-dimensional biological data |
 
 ---
