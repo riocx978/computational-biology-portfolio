@@ -1,227 +1,300 @@
+#!/usr/bin/env python3
+"""
+Protein Disorder Annotation & Dataset Splitting Pipeline
+Author: Rhea Charles | University of South Florida
+
+Description:
+    Processes UniProt and DisProt databases to extract intrinsically disordered
+    protein (IDP) region annotations, then splits the resulting dataset into
+    train/test sets using CD-HIT sequence clusters to prevent data leakage.
+
+    This pipeline was developed as part of a deep learning project to predict
+    intrinsically disordered protein linkers.
+
+Workflow:
+    1. Parse UniProt JSON — extract linker/disordered region annotations
+    2. Parse DisProt JSON — encode disorder state per residue (D=1, S=2, unknown=0)
+    3. Parse CD-HIT clusters — separate empty vs non-empty clusters
+    4. Split non-empty clusters 70/30 (train/test) to avoid sequence similarity leakage
+
+Input:
+    uniprot.json                                    — UniProt API export
+    DisProt release_2023_06 with_ambiguous_evidences.json — DisProt database release
+    Disprot_output.fasta.clstr                      — CD-HIT clustering output
+
+Output:
+    output_with_sequences.json                      — UniProt annotations with sequences
+    DisProt_disorder_annotation_ambiguous.txt       — per-residue disorder encoding
+    Disprot_output.fasta.emptyclstrs                — singleton clusters
+    Disprot_output.fasta.nonemptyclstrs             — multi-member clusters
+    Disprotclusters_70_percent.clstr                — training split
+    Disprotclusters_30_percent.clstr                — test split
+"""
+
 import os
 import json
-import numpy as np
 import random
+import numpy as np
 
-# Set the new working directory for UniProt data
-new_dir_uniprot = 'C:/Users/riocx/Documents/Masters new/Summer 2023/Dr. Zhao/Mapping sequences/For annotations'
-os.chdir(new_dir_uniprot)  # Change the current working directory to new_dir_uniprot
 
-# Load the JSON data from the UniProt file
-with open('uniprot.json', 'r') as file:  # Open the file in read mode
-    data_uniprot = json.load(file)  # Load the JSON data from the file into the variable data_uniprot
+# -----------------------------------------------------------------------------
+# Configuration — update these paths for your environment
+# -----------------------------------------------------------------------------
 
-# Create a list to store the extracted UniProt information
-output_data_uniprot = []  # Initialize an empty list to store processed UniProt data
+UNIPROT_DIR   = "data/uniprot"
+DISPROT_DIR   = "data/disprot"
+SPLIT_DIR     = "data/disprot/split"
 
-# Iterate over the proteins in the UniProt dataset
-for resultsEntry in data_uniprot['results']:  # Loop through each entry in the 'results' list of the JSON data
-    # Initialize variables for each entry
-    protein_regions = {}  # Dictionary to store protein region information
-    geneNames = []  # List to store gene names
-    type = ''  # Variable to store the feature type
-    description = ''  # Variable to store the feature description
-    uniProtkb_Id = ''  # Variable to store the UniProtKB ID
-    uniprotID = ''  # Variable to store the UniProt ID
-    scientificName = ''  # Variable to store the scientific name of the organism
-    taxonId = ''  # Variable to store the taxon ID
-    sequence = ''  # Variable to store the sequence
+UNIPROT_FILE  = "uniprot.json"
+DISPROT_FILE  = "DisProt release_2023_06 with_ambiguous_evidences.json"
+CDHIT_FILE    = "Disprot_output.fasta.clstr"
+SEQUENCES_FILE = "DisProt_sequences.fasta"
 
-    # Iterate over the features of the protein
-    for featureEntry in resultsEntry.get('features', []):  # Loop through each feature in the 'features' list
-        feature_type = featureEntry.get('type')  # Get the type of the feature
-        # Check if the description contains specific terms
-        if any(term in featureEntry.get('description', '') for term in ["linker", "binding", "Disordered"]):
-            description = featureEntry.get('description')  # Get the description of the feature
-            start = featureEntry['location']['start']['value']  # Get the start position of the feature
-            end = featureEntry['location']['end']['value']  # Get the end position of the feature
-            type = featureEntry['type']  # Get the type of the feature
+TRAIN_SPLIT   = 0.7   # Fraction of clusters for training set
+RANDOM_SEED   = 42    # For reproducibility
 
-            # Add feature information to the protein_regions dictionary
-            if feature_type not in protein_regions:  # Check if the feature type is already in the dictionary
-                protein_regions[feature_type] = []  # If not, add it with an empty list
-            protein_regions[feature_type].append({'start': start, 'end': end})  # Append the start and end positions
+random.seed(RANDOM_SEED)
 
-            # Extract general protein information
-            uniProtkb_Id = resultsEntry['uniProtkbId']  # Get the UniProtKB ID
-            uniprotID = resultsEntry['primaryAccession']  # Get the primary accession ID
-            scientificName = resultsEntry['organism']['scientificName']  # Get the scientific name of the organism
-            taxonId = resultsEntry['organism']['taxonId']  # Get the taxon ID
-            sequence = resultsEntry['sequence']['value']  # Get the sequence value
 
-    # Extract recommended name and alternative names
-    proteinDescription = resultsEntry.get('proteinDescription', {})  # Get the protein description dictionary
-    recommendedName = proteinDescription.get('recommendedName', {}).get('fullName', {}).get('value', '')  # Get the recommended name
-    alternativeNames = [name.get('fullName', {}).get('value', '') for name in proteinDescription.get('alternativeNames', [])]  # Get the alternative names
+# =============================================================================
+# Step 1. Parse UniProt — extract linker and disordered region annotations
+# =============================================================================
 
-    # Extract gene names
-    genes = resultsEntry.get('genes', [])  # Get the list of genes
-    geneNames = [gene.get('geneName', {}).get('value', '') for gene in genes]  # Get the gene names
+def parse_uniprot(filepath):
+    """
+    Extracts protein features annotated as linker, binding, or disordered
+    regions from a UniProt JSON export.
 
-    # Create a dictionary with the extracted data
-    extracted_data_uniprot = {
-        "uniProtkb Id": uniProtkb_Id,  # Add the UniProtKB ID to the dictionary
-        "uniprot ID": uniprotID,  # Add the UniProt ID to the dictionary
-        "scientificName": scientificName,  # Add the scientific name to the dictionary
-        "taxonId": taxonId,  # Add the taxon ID to the dictionary
-        "Regions": protein_regions,  # Add the protein regions to the dictionary
-        "Type": type,  # Add the feature type to the dictionary
-        "Description": description,  # Add the description to the dictionary
-        "Recommended Names": recommendedName,  # Add the recommended names to the dictionary
-        "Alternative Names": alternativeNames,  # Add the alternative names to the dictionary
-        "Gene Names": geneNames,  # Add the gene names to the dictionary
-        "Sequence": sequence  # Add the sequence to the dictionary
-    }
+    Returns a list of dicts with protein metadata, region coordinates,
+    and full amino acid sequence.
+    """
+    with open(filepath, "r") as f:
+        data = json.load(f)
 
-    # Append the extracted data to the output list
-    output_data_uniprot.append(extracted_data_uniprot)  # Add the extracted data dictionary to the output list
+    records = []
+    target_terms = {"linker", "binding", "Disordered"}
 
-# Write the output data to a JSON file
-output_path_uniprot = "output_with_sequences.json"  # Define the output file path
-with open(output_path_uniprot, 'w') as file:  # Open the file in write mode
-    json.dump(output_data_uniprot, file, indent=4)  # Write the output data to the file with indentation for readability
+    for entry in data["results"]:
+        protein_regions = {}
 
-print("UniProt data is saved to:", output_path_uniprot)  # Print a message indicating the output file path for UniProt data
+        for feature in entry.get("features", []):
+            description = feature.get("description", "")
 
-# Set the new working directory for DisProt data
-new_dir_disprot = 'C:/Users/riocx/Documents/Masters new/Summer 2023/Dr. Zhao/Mapping sequences/For annotations/Disprot'
-os.chdir(new_dir_disprot)  # Change the current working directory to new_dir_disprot
+            if not any(term in description for term in target_terms):
+                continue
 
-# Specify the path to the DisProt JSON file and the encoding
-json_file_path = "DisProt release_2023_06 with_ambiguous_evidences.json"  # Define the JSON file path
-encoding = 'utf-8'  # Use 'utf-8' encoding for the JSON file
+            feature_type = feature.get("type")
+            start = feature["location"]["start"]["value"]
+            end   = feature["location"]["end"]["value"]
 
-# Read data from the JSON file with the specified encoding
-with open(json_file_path, "rt", encoding=encoding) as file:  # Open the file in read mode with specified encoding
-    data_disprot = json.load(file)  # Load the JSON data from the file into the variable data_disprot
+            if feature_type not in protein_regions:
+                protein_regions[feature_type] = []
+            protein_regions[feature_type].append({"start": start, "end": end})
 
-# Extract the relevant data from the JSON
-b = data_disprot["data"]  # Extract the 'data' list from the JSON data
+        protein_desc = entry.get("proteinDescription", {})
 
-# Open a text file for writing the DisProt disorder annotations
-with open("DisProt_disorder_annotation_ambiguous.txt", "wt") as y:  # Open the file in write mode
-    lst = []  # Initialize an empty list to store the annotations
+        record = {
+            "uniProtkbId":        entry.get("uniProtkbId", ""),
+            "uniprotID":          entry.get("primaryAccession", ""),
+            "scientificName":     entry.get("organism", {}).get("scientificName", ""),
+            "taxonId":            entry.get("organism", {}).get("taxonId", ""),
+            "regions":            protein_regions,
+            "recommendedName":    protein_desc.get("recommendedName", {})
+                                              .get("fullName", {})
+                                              .get("value", ""),
+            "alternativeNames":   [n.get("fullName", {}).get("value", "")
+                                   for n in protein_desc.get("alternativeNames", [])],
+            "geneNames":          [g.get("geneName", {}).get("value", "")
+                                   for g in entry.get("genes", [])],
+            "sequence":           entry.get("sequence", {}).get("value", "")
+        }
+        records.append(record)
 
-    # Iterate over each entry in the DisProt data
-    for j in b:  # Loop through each entry in the 'data' list
-        uniprot = j["acc"]  # Get the UniProt accession
-        disid = j["disprot_id"]  # Get the DisProt ID
-        seq = j["sequence"]  # Get the amino acid sequence
-        dis = np.zeros(len(seq), dtype=np.uint8)  # Initialize a numpy array for disorder annotations
-        disorder_consensus = j["disprot_consensus"]  # Get the disorder consensus information
-        disorder = disorder_consensus["Structural state"]  # Get the structural state information
+    return records
 
-        # Annotate the sequence with disorder information
-        for n in disorder:  # Loop through each disorder annotation
-            if n["type"] == "D":  # Check if the type is disordered
-                dis[n["start"]-1:n["end"]] = 1  # Mark disordered regions with 1
-            elif n["type"] == "S":  # Check if the type is structured
-                dis[n["start"]-1:n["end"]] = 2  # Mark structured regions with 2
 
-        # Append the formatted annotation to the list
-        lst.append(uniprot + "_" + disid + '\n' + seq.strip() + "\n" + "".join(list(map(str, dis))) + "\n")
+os.chdir(UNIPROT_DIR)
+uniprot_records = parse_uniprot(UNIPROT_FILE)
 
-    # Write the annotations to the text file
-    for n in lst:  # Loop through each annotation in the list
-        y.write(">" + n.strip() + "\n")  # Write the formatted annotation to the file
+with open("output_with_sequences.json", "w") as f:
+    json.dump(uniprot_records, f, indent=4)
 
-print("DisProt data is saved to DisProt_disorder_annotation_ambiguous.txt")  # Print a message indicating the output file path for DisProt data
+print(f"UniProt: {len(uniprot_records)} records saved to output_with_sequences.json")
 
-# Set the working directory to a specific path for CD-HIT cluster parsing
-os.chdir("C:/Users/riocx/Documents/Masters new/Summer 2023/Dr. Zhao/Mapping sequences/For annotations/Disprot")
 
-# Specify the path to the CD-HIT .clstr file
-Kinase_cluster = "C:/Users/riocx/Documents/Masters new/Summer 2023/Dr. Zhao/Mapping sequences/For annotations/Disprot/Disprot_output.fasta.clstr"
+# =============================================================================
+# Step 2. Parse DisProt — encode disorder state per residue
+# =============================================================================
+# Each residue is encoded as:
+#   0 = unknown / unannotated
+#   1 = disordered (D)
+#   2 = structured (S)
+#
+# Output format (FASTA-like):
+#   > uniprotID_disprotID
+#   <amino acid sequence>
+#   <disorder encoding string>
 
-def parse_cdhit_clusters(Kinase_cluster):
-    with open("Disprot_output.fasta.emptyclstrs", "w") as f_empty:
-        with open("Disprot_output.fasta.nonemptyclstrs", "w") as f_nonEmpty:
-            clusters = []
-            temp_cluster_data = []
-            cluster_lines_counter = 0
+def parse_disprot(filepath, encoding="utf-8"):
+    """
+    Reads a DisProt JSON release and produces per-residue disorder annotations.
+    Returns a list of formatted annotation strings.
+    """
+    with open(filepath, "rt", encoding=encoding) as f:
+        data = json.load(f)
 
-            with open(Kinase_cluster, 'r') as f:
-                current_cluster_name = None  # Initialize current cluster name
-                for line in f:
-                    if line.startswith('>'):
-                        # Save the previous cluster data if available
-                        if current_cluster_name:
-                            if cluster_lines_counter == 1:
-                                f_empty.writelines(temp_cluster_data)
-                            else:
-                                f_nonEmpty.writelines(temp_cluster_data)
-                        
-                        # Update the current cluster name
-                        current_cluster_name = line.strip()
-                        
-                        # Reset the counter and temporary data
-                        cluster_lines_counter = 0
-                        temp_cluster_data = [line]
-                    else:
-                        temp_cluster_data.append(line)
-                        cluster_lines_counter += 1
+    annotations = []
 
-                # Write the last cluster data after the loop
-                if current_cluster_name:
-                    if cluster_lines_counter == 1:
-                        f_empty.writelines(temp_cluster_data)
-                    else:
-                        f_nonEmpty.writelines(temp_cluster_data)
+    for entry in data["data"]:
+        uniprot_acc = entry["acc"]
+        disprot_id  = entry["disprot_id"]
+        sequence    = entry["sequence"]
 
-# Call the function to extract clusters
-parse_cdhit_clusters(Kinase_cluster)  # Extract clusters from the specified .clstr file
+        # Initialize all residues as unknown (0)
+        disorder_encoding = np.zeros(len(sequence), dtype=np.uint8)
 
-# Set the working directory to a specific path for splitting clusters
-os.chdir("C:/Users/riocx/Documents/Masters new/Summer 2023/Dr. Zhao/Mapping sequences/For annotations/Disprot/SPLIT")
+        structural_states = entry.get("disprot_consensus", {}) \
+                                 .get("Structural state", [])
 
-# Specify the paths to the sequences file and the non-empty clusters file
-sequencesFilePath = "DisProt_sequences.fasta"  # Define the path to the sequences file
-input_fasta_file = "Disprot_output.fasta.nonemptyclstrs"  # Define the path to the non-empty clusters file
+        for region in structural_states:
+            start = region["start"] - 1  # Convert to 0-indexed
+            end   = region["end"]
 
-# Load the contents of the input FASTA file into a list
-with open(input_fasta_file, 'r') as file:  # Open the file in read mode
-    data = file.read().splitlines()  # Read the file and split into lines
+            if region["type"] == "D":
+                disorder_encoding[start:end] = 1
+            elif region["type"] == "S":
+                disorder_encoding[start:end] = 2
 
-# Initialize a list to hold the clusters
-clusters = []  # Initialize an empty list to store clusters
+        annotation = (
+            f">{uniprot_acc}_{disprot_id}\n"
+            f"{sequence.strip()}\n"
+            f"{''.join(map(str, disorder_encoding))}"
+        )
+        annotations.append(annotation)
 
-# Parse the data into clusters
-current_cluster = []  # Initialize a list to hold the current cluster data
-for line in data:  # Loop through each line in the data
-    if line.startswith('>Cluster'):  # Check if the line starts with '>Cluster' indicating a new cluster
-        if current_cluster:
-            clusters.append(current_cluster)  # Add the current cluster to the list of clusters
-        current_cluster = [line]  # Start a new cluster
-    else:
-        current_cluster.append(line)  # Add the line to the current cluster
+    return annotations
 
-# Add the last cluster
-if current_cluster:
-    clusters.append(current_cluster)  # Add the last cluster to the list of clusters
 
-# Shuffle the clusters randomly
-random.shuffle(clusters)  # Shuffle the clusters randomly
+os.chdir(DISPROT_DIR)
+disprot_annotations = parse_disprot(DISPROT_FILE)
 
-# Calculate the number of clusters to allocate to each group
-total_clusters = len(clusters)  # Get the total number of clusters
-num_clusters_70_percent = int(total_clusters * 0.7)  # Calculate the number of clusters for the 70% group
+with open("DisProt_disorder_annotation_ambiguous.txt", "wt") as f:
+    f.write("\n".join(disprot_annotations))
 
-# Allocate clusters to the 70% and 30% groups
-clusters_70_percent = clusters[:num_clusters_70_percent]  # Get the first 70% of clusters
-clusters_30_percent = clusters[num_clusters_70_percent:]  # Get the remaining 30% of clusters
+print(f"DisProt: {len(disprot_annotations)} sequences annotated")
 
-# Save the clusters to separate files
-output_file_path_70 = 'Disprotclusters_70_percent.clstr'  # Define the output file path for the 70% clusters
-with open(output_file_path_70, 'w') as file1:  # Open the file in write mode
-    for cluster in clusters_70_percent:  # Loop through each cluster in the 70% group
-        file1.write('\n'.join(cluster) + '\n')  # Write the cluster to the file
 
-output_file_path_30 = 'Disprotclusters_30_percent.clstr'  # Define the output file path for the 30% clusters
-with open(output_file_path_30, 'w') as file2:  # Open the file in write mode
-    for cluster in clusters_30_percent:  # Loop through each cluster in the 30% group
-        file2.write('\n'.join(cluster) + '\n')  # Write the cluster to the file
+# =============================================================================
+# Step 3. Parse CD-HIT clusters — separate singletons from multi-member clusters
+# =============================================================================
+# Singletons (only one sequence in a cluster) are separated from multi-member
+# clusters. Only multi-member clusters are used for train/test splitting to
+# ensure meaningful sequence diversity in both sets.
 
-# Print the number of clusters in the total and 70% split
-print("clusters in total clusters:", total_clusters)  # Print the total number of clusters
-print("clusters in the 70% split:", num_clusters_70_percent)  # Print the number of clusters in the 70% split
-print(total_clusters)  # Print the total number of clusters again
+def parse_cdhit_clusters(clstr_filepath, out_empty, out_nonempty):
+    """
+    Splits a CD-HIT .clstr file into singleton and multi-member cluster files.
+
+    Args:
+        clstr_filepath: path to .clstr file from CD-HIT
+        out_empty:      output path for singleton clusters
+        out_nonempty:   output path for multi-member clusters
+    """
+    with open(out_empty, "w") as f_single, \
+         open(out_nonempty, "w") as f_multi, \
+         open(clstr_filepath, "r") as f_in:
+
+        current_name  = None
+        current_lines = []
+        member_count  = 0
+
+        for line in f_in:
+            if line.startswith(">"):
+                # Flush previous cluster
+                if current_name:
+                    target = f_single if member_count == 1 else f_multi
+                    target.writelines(current_lines)
+
+                current_name  = line.strip()
+                current_lines = [line]
+                member_count  = 0
+            else:
+                current_lines.append(line)
+                member_count += 1
+
+        # Flush final cluster
+        if current_name:
+            target = f_single if member_count == 1 else f_multi
+            target.writelines(current_lines)
+
+
+parse_cdhit_clusters(
+    CDHIT_FILE,
+    out_empty    = "Disprot_output.fasta.emptyclstrs",
+    out_nonempty = "Disprot_output.fasta.nonemptyclstrs"
+)
+print("CD-HIT clusters parsed into singleton and multi-member files")
+
+
+# =============================================================================
+# Step 4. Split clusters 70/30 — train/test without sequence similarity leakage
+# =============================================================================
+# Splitting at the cluster level (not sequence level) ensures that sequences
+# with high similarity do not appear in both train and test sets — a critical
+# step for unbiased model evaluation in protein ML tasks.
+
+def split_clusters(clstr_filepath, train_path, test_path, train_fraction=0.7):
+    """
+    Randomly splits CD-HIT clusters into train and test sets.
+
+    Splitting by cluster (not by sequence) prevents data leakage from
+    highly similar sequences appearing in both sets.
+    """
+    with open(clstr_filepath, "r") as f:
+        lines = f.read().splitlines()
+
+    # Group lines into clusters
+    clusters = []
+    current  = []
+
+    for line in lines:
+        if line.startswith(">Cluster"):
+            if current:
+                clusters.append(current)
+            current = [line]
+        else:
+            current.append(line)
+
+    if current:
+        clusters.append(current)
+
+    random.shuffle(clusters)
+
+    n_train = int(len(clusters) * train_fraction)
+    train_clusters = clusters[:n_train]
+    test_clusters  = clusters[n_train:]
+
+    with open(train_path, "w") as f:
+        for cluster in train_clusters:
+            f.write("\n".join(cluster) + "\n")
+
+    with open(test_path, "w") as f:
+        for cluster in test_clusters:
+            f.write("\n".join(cluster) + "\n")
+
+    return len(clusters), n_train
+
+
+os.chdir(SPLIT_DIR)
+
+total, n_train = split_clusters(
+    f"../{'/'.join(['Disprot_output.fasta.nonemptyclstrs'])}",
+    train_path     = "Disprotclusters_70_percent.clstr",
+    test_path      = "Disprotclusters_30_percent.clstr",
+    train_fraction = TRAIN_SPLIT
+)
+
+print(f"\nDataset split complete:")
+print(f"  Total clusters : {total}")
+print(f"  Training (70%) : {n_train}")
+print(f"  Test (30%)     : {total - n_train}")
