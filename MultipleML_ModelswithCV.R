@@ -1,255 +1,355 @@
-library(MLDataR)
-library(dplyr)
-library(tidyr)
-library(tidymodels)
-library(data.table)
-library(ConfusionTableR)
-library(OddsPlotty)
-library(ROCR)
-library(ggplot2)
-library(glmnet)
-library(caret)
-library(randomForest)
-library(caTools)
-require(gbm)
-library(gbm)
-library(pROC)
+# ============================================================================
+# Heart Disease Prediction: Comparative ML Models
+# ============================================================================
+# Purpose: Compare multiple classification models (Logistic Regression,
+#          Naive Bayes, LASSO, Random Forest, Gradient Boosting) on the
+#          Heart Disease dataset
+# Author: Rhea Charles
+# ============================================================================
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(MLDataR)
+  library(dplyr)
+  library(tidyr)
+  library(tidymodels)
+  library(data.table)
+  library(ConfusionTableR)
+  library(OddsPlotty)
+  library(ROCR)
+  library(ggplot2)
+  library(glmnet)
+  library(caret)
+  library(randomForest)
+  library(caTools)
+  library(gbm)
+  library(pROC)
+})
+
+# ============================================================================
+# SECTION 1: DATA LOADING AND PREPROCESSING
+# ============================================================================
+
 data(package = "MLDataR")
 df <- heartdisease
+
+# Encode categorical variables as binary
 df$Sex <- ifelse(df$Sex == "F", 1, 0)
 df$RestingECG <- ifelse(df$RestingECG == "ST", 1, 0)
 df$Angina <- ifelse(df$Angina == "Y", 1, 0)
-#Explore data
-# Boxplot for MaxHR with heart disease status
-ggplot(df, aes(x = factor(HeartDisease), y = MaxHR, fill = factor(HeartDisease))) +
+
+# ============================================================================
+# SECTION 2: EXPLORATORY DATA ANALYSIS
+# ============================================================================
+
+# 2.1: Distribution of key continuous variables by Heart Disease status
+p1 <- ggplot(df, aes(x = factor(HeartDisease), y = MaxHR,
+                     fill = factor(HeartDisease))) +
   geom_boxplot() +
-  labs(x = "Heart Disease", y = "MaxHR", fill = "Heart Disease") +
-  theme_minimal()
+  labs(x = "Heart Disease Status", y = "Maximum Heart Rate (MaxHR)",
+       fill = "Heart Disease") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
 
-# Boxplot for HeartPeakReading with heart disease status
-ggplot(df, aes(x = factor(HeartDisease), y = HeartPeakReading, fill = factor(HeartDisease))) +
+p2 <- ggplot(df, aes(x = factor(HeartDisease), y = HeartPeakReading,
+                     fill = factor(HeartDisease))) +
   geom_boxplot() +
-  labs(x = "Heart Disease", y = "HeartPeakReading", fill = "Heart Disease") +
-  theme_minimal()
-# Correlation matrix
-# Calculate correlation matrix
-correlation_matrix <- cor(df)
+  labs(x = "Heart Disease Status", y = "Heart Peak Reading",
+       fill = "Heart Disease") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
 
-# Extract correlations with HeartDisease
-heart_disease_correlations <- correlation_matrix["HeartDisease", -c(1, ncol(correlation_matrix))]
-
-# Print the correlations
-print(heart_disease_correlations)
-
-# Assuming df_selected contains the relevant variables
+# 2.2: Feature correlation analysis
 df_selected <- select(df, MaxHR, Angina, HeartPeakReading, HeartDisease)
 correlation_matrix <- cor(df_selected)
 
-# Create a heatmap
-ggplot(data = as.data.frame(correlation_matrix), aes(x = rownames(correlation_matrix), y = rownames(correlation_matrix), fill = HeartDisease)) +
-  geom_tile() +
-  geom_text(aes(label = round(HeartDisease, 2)), color = "black") +
-  scale_fill_gradient(low = "orange", high = "red") +  # Customize the orange color scale
-  theme_minimal() +
-  labs(title = "Correlation Matrix with Heart Disease") +
-  scale_x_discrete(name = "Disease Variables") +
-  scale_y_discrete(name = "Disease Variables")
+# Visualize correlation matrix as heatmap
+correlation_df <- as.data.frame(as.table(correlation_matrix))
+colnames(correlation_df) <- c("Var1", "Var2", "Correlation")
 
-#Split into test data
-df <- heartdisease
-n <- nrow(df)
+ggplot(correlation_df, aes(x = Var1, y = Var2, fill = Correlation)) +
+  geom_tile() +
+  geom_text(aes(label = round(Correlation, 2)), color = "black", size = 3) +
+  scale_fill_gradient(low = "orange", high = "red") +
+  theme_minimal() +
+  labs(title = "Feature Correlation Matrix",
+       x = "Variables", y = "Variables") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+cat("\nFeature correlations with HeartDisease:\n")
+print(cor(df)[, "HeartDisease"])
+
+# ============================================================================
+# SECTION 3: MODEL 1 - LOGISTIC REGRESSION
+# ============================================================================
+
+cat("\n========================================\n")
+cat("MODEL 1: LOGISTIC REGRESSION\n")
+cat("========================================\n")
+
+df_lr <- heartdisease
+n <- nrow(df_lr)
 set.seed(200)
 ntest <- trunc(n / 3)
 testid <- sample(1:n, ntest)
-#mean absolute prediction error = 0.3040682
-# Fit logistic regression model
-model <- glm(HeartDisease ~ .,data = df[-testid, ], family = binomial)
-# Calculate predicted probabilities for the test data
-lpred <- predict(model, newdata = df[testid, ], type = "response")
 
-# Convert probabilities to binary predictions based on a threshold (0.5)
+# Fit logistic regression model
+model_lr <- glm(HeartDisease ~ ., data = df_lr[-testid, ], family = binomial)
+
+# Make predictions
+lpred <- predict(model_lr, newdata = df_lr[testid, ], type = "response")
 pred <- ifelse(lpred > 0.5, 1, 0)
 
-# Compute accuracy metrics
-accuracy <- mean(pred == df$HeartDisease[testid])
-sensitivity <- sum(pred == 1 & df$HeartDisease[testid] == 1) / sum(df$HeartDisease[testid] == 1)
-specificity <- sum(pred == 0 & df$HeartDisease[testid] == 0) / sum(df$HeartDisease[testid] == 0)
-precision <- sum(pred == 1 & df$HeartDisease[testid] == 1) / sum(pred == 1)
-recall <- sensitivity
-f1_score <- 2 * (precision * recall) / (precision + recall)
-# Summarize the model
-summary(model)
-# Evaluate confusion matrix
-pred <- ifelse(lpred > 0.5, 1, 0)  # Convert probabilities to binary predictions
-conf_matrix <- table(Predicted = pred, Actual = df$HeartDisease[testid])
-print(conf_matrix)
-# Print accuracy metrics
-cat("Accuracy:", accuracy, "\n")
-cat("Sensitivity:", sensitivity, "\n")
-cat("Specificity:", specificity, "\n")
-cat("Precision:", precision, "\n")
-cat("Recall:", recall, "\n")
-cat("F1-score:", f1_score, "\n")
+# Calculate metrics
+accuracy_lr <- mean(pred == df_lr$HeartDisease[testid])
+sensitivity_lr <- sum(pred == 1 & df_lr$HeartDisease[testid] == 1) /
+                  sum(df_lr$HeartDisease[testid] == 1)
+specificity_lr <- sum(pred == 0 & df_lr$HeartDisease[testid] == 0) /
+                  sum(df_lr$HeartDisease[testid] == 0)
+precision_lr <- sum(pred == 1 & df_lr$HeartDisease[testid] == 1) /
+                sum(pred == 1)
+recall_lr <- sensitivity_lr
+f1_lr <- 2 * (precision_lr * recall_lr) / (precision_lr + recall_lr)
 
-# Make predictions with Naive Bayes model
-df <- na.omit(heartdisease)
-df$HeartDisease <- as.factor(df$HeartDisease)
-#Naïve Bayes model to predict SC2 vs. no_virus vs. other_virus on the training set and calculate correct prediction rate (accuracy) on the validation set
+# Print results
+cat("Logistic Regression - Model Summary:\n")
+cat("Accuracy:  ", round(accuracy_lr, 4), "\n")
+cat("Sensitivity: ", round(sensitivity_lr, 4), "\n")
+cat("Specificity: ", round(specificity_lr, 4), "\n")
+cat("Precision:   ", round(precision_lr, 4), "\n")
+cat("Recall:      ", round(recall_lr, 4), "\n")
+cat("F1-Score:    ", round(f1_lr, 4), "\n")
+
+# Confusion matrix
+conf_matrix_lr <- table(Predicted = pred, Actual = df_lr$HeartDisease[testid])
+cat("\nConfusion Matrix:\n")
+print(conf_matrix_lr)
+
+# ============================================================================
+# SECTION 4: MODEL 2 - NAIVE BAYES
+# ============================================================================
+
+cat("\n========================================\n")
+cat("MODEL 2: NAIVE BAYES\n")
+cat("========================================\n")
+
+df_nb <- na.omit(heartdisease)
+df_nb$HeartDisease <- as.factor(df_nb$HeartDisease)
+
 set.seed(100)
-dt = sort(sample(nrow(df), nrow(df)*.7))
-train <- df[dt, ]
-test <- df[-dt, ]
-trctrl <- trainControl(method = "cv", number = 10, savePredictions=TRUE)
-nb_fit <- train(factor(HeartDisease) ~ ., data = df, method = "naive_bayes", trControl=trctrl, tuneLength = 0)
-nb_fit
-# Make predictions with Naive Bayes model
-nb.pred <- predict(nb_fit, test)
-# Calculate accuracy for Naive Bayes model
-confusionMatrix(test$HeartDisease, nb.pred)
-nb.acc <- mean(nb.pred == test$HeartDisease)
-nb.acc
+dt_nb <- sort(sample(nrow(df_nb), nrow(df_nb) * 0.7))
+train_nb <- df_nb[dt_nb, ]
+test_nb <- df_nb[-dt_nb, ]
 
-#LASSO
-#Use 10-fold CV and LASSO to find best set of features
-# Load data
-df <- heartdisease
-x <- model.matrix(HeartDisease ~ ., data = df)[, -1]
-y <- df$HeartDisease
+# Train Naive Bayes model with 10-fold cross-validation
+trctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+model_nb <- train(HeartDisease ~ .,
+                  data = df_nb,
+                  method = "naive_bayes",
+                  trControl = trctrl,
+                  tuneLength = 0)
 
-# Fit Lasso model
-fit.lasso <- cv.glmnet(x, y, alpha = 1)
+# Make predictions
+pred_nb <- predict(model_nb, test_nb)
+conf_matrix_nb <- confusionMatrix(test_nb$HeartDisease, pred_nb)
+accuracy_nb <- mean(pred_nb == test_nb$HeartDisease)
 
-# Plot Lasso coefficient paths and CV plot
-plot(fit.lasso, xvar = "lambda", label = TRUE)
-coef(fit.lasso)
+cat("Naive Bayes - Model Performance:\n")
+cat("Accuracy: ", round(accuracy_nb, 4), "\n")
+cat("\nConfusion Matrix:\n")
+print(conf_matrix_nb$table)
+cat("\nDetailed Metrics:\n")
+print(conf_matrix_nb$byClass)
 
-# Determine best lambda and retrieve coefficients
-best_lambda <- fit.lasso$lambda.min
-best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
-coef(best_model)
+# ============================================================================
+# SECTION 5: MODEL 3 - LASSO REGULARIZATION
+# ============================================================================
 
-# Cross-validation
+cat("\n========================================\n")
+cat("MODEL 3: LASSO REGULARIZATION\n")
+cat("========================================\n")
+
+df_lasso <- heartdisease
+x <- model.matrix(HeartDisease ~ ., data = df_lasso)[, -1]
+y <- df_lasso$HeartDisease
+
+# Fit LASSO model with cross-validation
+fit_lasso <- cv.glmnet(x, y, alpha = 1, family = "binomial")
+
+# Extract best model
+best_lambda <- fit_lasso$lambda.min
+best_model_lasso <- glmnet(x, y, alpha = 1, lambda = best_lambda,
+                           family = "binomial")
+
+cat("LASSO - Selected Features (non-zero coefficients):\n")
+lasso_coefs <- coef(best_model_lasso)
+print(lasso_coefs[lasso_coefs[, 1] != 0, , drop = FALSE])
+
+# Perform 10-fold cross-validation
 set.seed(123)
-folds <- sample(rep(1:10, length = nrow(df)))
-cv.errors <- matrix(NA, 10, 19)
+folds <- sample(rep(1:10, length = nrow(df_lasso)))
 test_errors <- numeric(10)
 
 for (k in 1:10) {
-  # Split data into training and test sets based on the fold
   x_train <- x[folds != k, ]
   y_train <- y[folds != k]
   x_test <- x[folds == k, ]
   y_test <- y[folds == k]
-  
-  # Perform LASSO regression on the training set
-  cv.lasso <- cv.glmnet(x_train, y_train, alpha = 1)
-  
-  # Evaluate the model on the test set
-  pred <- predict(cv.lasso, newx = x_test, s = "lambda.min")
-  test_errors[k] <- mean((y_test - pred)^2)
-  
-  # Perform cross-validation on the training set
-  for (i in 1:19) {
-    pred_cv <- predict(cv.lasso, s = cv.lasso$lambda[i], newx = x_train)
-    cv.errors[k, i] <- mean((y_train - pred_cv)^2)
-  }
+
+  # Fit LASSO on training fold
+  cv_lasso <- cv.glmnet(x_train, y_train, alpha = 1, family = "binomial")
+
+  # Predict on test fold
+  pred_lasso <- predict(cv_lasso, newx = x_test, s = "lambda.min",
+                        type = "response")
+  pred_binary <- ifelse(pred_lasso > 0.5, 1, 0)
+
+  # Store test error
+  test_errors[k] <- mean(pred_binary != y_test)
 }
 
-# Compute average test error
 mean_test_error <- mean(test_errors)
+cat("Mean Cross-Validation Error: ", round(mean_test_error, 4), "\n")
+cat("Mean Accuracy: ", round(1 - mean_test_error, 4), "\n")
 
-# Plot ROC curve and calculate AUC
-pred_roc <- prediction(pred, y_test)
-perf_roc <- performance(pred_roc, "tpr", "fpr")
-plot(perf_roc, colorize = TRUE)
-abline(a = 0, b = 1, lty = 2, col = "gray")
-auc <- performance(pred_roc, measure = "auc")
-auc_value <- auc@y.values[[1]]
-cat("Area under the ROC curve (AUC):", auc_value, "\n")
+# ============================================================================
+# SECTION 6: MODEL 4 - RANDOM FOREST
+# ============================================================================
 
-# Compute predictions on the test set
-pred <- predict(best_model, newx = x_test, s = best_lambda, type = "response")
+cat("\n========================================\n")
+cat("MODEL 4: RANDOM FOREST\n")
+cat("========================================\n")
 
-# Convert probabilities to binary predictions based on a threshold (0.5 by default)
-binary_pred <- ifelse(pred > 0.5, 1, 0)
+df_rf <- heartdisease
+df_rf$HeartDisease <- as.factor(df_rf$HeartDisease)
+df_rf$Sex <- as.factor(df_rf$Sex)
+df_rf$RestingECG <- as.factor(df_rf$RestingECG)
+df_rf$Angina <- as.factor(df_rf$Angina)
+df_rf <- na.omit(df_rf)
 
-# Compute confusion matrix
-conf_matrix <- table(Actual = y_test, Predicted = binary_pred)
-
-# Compute accuracy metrics
-accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
-sensitivity <- conf_matrix[2, 2] / sum(conf_matrix[2, ])
-specificity <- conf_matrix[1, 1] / sum(conf_matrix[1, ])
-precision <- conf_matrix[2, 2] / sum(conf_matrix[, 2])
-recall <- sensitivity
-f1_score <- 2 * precision * recall / (precision + recall)
-
-# Print accuracy metrics
-cat("Accuracy:", accuracy, "\n")
-cat("Sensitivity:", sensitivity, "\n")
-cat("Specificity:", specificity, "\n")
-cat("Precision:", precision, "\n")
-cat("Recall:", recall, "\n")
-cat("F1-score:", f1_score, "\n")
-
-#Random Forest
-df <- heartdisease
-df$HeartDisease <- as.factor(df$HeartDisease)
-df$Sex <- as.factor(df$Sex)
-df$RestingECG <- as.factor(df$RestingECG)
-df$Angina <- as.factor(df$Angina)
-df <- na.omit(df)
 set.seed(222)
-dt = sort(sample(nrow(df), nrow(df)*.7))
-train <- df[dt, ]
-test <- df[-dt, ]
-rf <- randomForest(HeartDisease ~ ., data=train, proximity=TRUE)
-p1 <- predict(rf, train)
-confusionMatrix(p1, train$HeartDisease)
-p2 <- predict(rf, test)
-confusionMatrix(p2, test$HeartDisease)
-plot(rf)
+dt_rf <- sort(sample(nrow(df_rf), nrow(df_rf) * 0.7))
+train_rf <- df_rf[dt_rf, ]
+test_rf <- df_rf[-dt_rf, ]
 
-#Boosting
-df <- heartdisease
-# Convert HeartDisease to numeric (assuming it's binary)
-df$HeartDisease <- as.numeric(df$HeartDisease)
+# Train Random Forest
+model_rf <- randomForest(HeartDisease ~ ., data = train_rf, proximity = TRUE)
 
-# Convert categorical variables to factors
-df$Sex <- as.factor(df$Sex)
-df$RestingECG <- as.factor(df$RestingECG)
-df$Angina <- as.factor(df$Angina)
+# Predictions
+pred_train_rf <- predict(model_rf, train_rf)
+pred_test_rf <- predict(model_rf, test_rf)
 
-# Split data into train and test sets
-set.seed(123)  # For reproducibility
-dt <- sample(nrow(df), 0.7 * nrow(df))
-train <- df[dt, ]
-test <- df[-dt, ]
+cat("Random Forest - Training Set Performance:\n")
+conf_train_rf <- confusionMatrix(pred_train_rf, train_rf$HeartDisease)
+print(conf_train_rf$table)
 
-# Train the boosting model
-boost <- gbm(HeartDisease ~ ., data = train, distribution = "bernoulli",
-             n.trees = 10000, shrinkage = 0.01, interaction.depth = 4)
-summary(boost)
-# Predict class probabilities on the test set
-predmat <- predict(boost, newdata = test, n.trees = 10000, type = "response")
+cat("\nRandom Forest - Test Set Performance:\n")
+conf_test_rf <- confusionMatrix(pred_test_rf, test_rf$HeartDisease)
+print(conf_test_rf$table)
 
-# Calculate accuracy
-pred_labels <- ifelse(predmat > 0.5, 1, 0)
-accuracy <- mean(pred_labels == test$HeartDisease)
-cat("Accuracy:", accuracy, "\n")
+cat("\nTest Set Metrics:\n")
+print(conf_test_rf$byClass)
 
-# Calculate AUC-ROC
-rocobj <- roc(test$HeartDisease, predmat)
-auc <- round(auc(rocobj), 4)
-cat("AUC-ROC:", auc, "\n")
-# Calculate precision, recall, and F1-score
-conf_matrix <- confusionMatrix(factor(pred_labels), factor(test$HeartDisease))
-precision <- conf_matrix$byClass["Pos Pred Value"]
-recall <- conf_matrix$byClass["Sensitivity"]
-f1_score <- conf_matrix$byClass["F1"]
-cat("Precision:", precision, "\n")
-cat("Recall:", recall, "\n")
-cat("F1-score:", f1_score, "\n")
+# Feature importance
+cat("\nTop 10 Important Features:\n")
+importance_rf <- importance(model_rf)
+print(head(importance_rf[order(importance_rf[, 1], decreasing = TRUE), ], 10))
 
-# Plot ROC curve
-plot(rocobj, main = paste0("ROC Curve (AUC = ", auc, ")"))
+# ============================================================================
+# SECTION 7: MODEL 5 - GRADIENT BOOSTING
+# ============================================================================
+
+cat("\n========================================\n")
+cat("MODEL 5: GRADIENT BOOSTING\n")
+cat("========================================\n")
+
+df_gb <- heartdisease
+df_gb$HeartDisease <- as.numeric(df_gb$HeartDisease)
+df_gb$Sex <- as.factor(df_gb$Sex)
+df_gb$RestingECG <- as.factor(df_gb$RestingECG)
+df_gb$Angina <- as.factor(df_gb$Angina)
+
+set.seed(123)
+dt_gb <- sample(nrow(df_gb), 0.7 * nrow(df_gb))
+train_gb <- df_gb[dt_gb, ]
+test_gb <- df_gb[-dt_gb, ]
+
+# Train Gradient Boosting model
+model_gb <- gbm(HeartDisease ~ .,
+                data = train_gb,
+                distribution = "bernoulli",
+                n.trees = 10000,
+                shrinkage = 0.01,
+                interaction.depth = 4)
+
+# Predictions
+pred_gb <- predict(model_gb, newdata = test_gb, n.trees = 10000,
+                   type = "response")
+pred_binary_gb <- ifelse(pred_gb > 0.5, 1, 0)
+
+# Performance metrics
+accuracy_gb <- mean(pred_binary_gb == test_gb$HeartDisease)
+rocobj_gb <- roc(test_gb$HeartDisease, pred_gb)
+auc_gb <- round(auc(rocobj_gb), 4)
+
+conf_matrix_gb <- confusionMatrix(factor(pred_binary_gb),
+                                   factor(test_gb$HeartDisease))
+
+cat("Gradient Boosting - Performance Metrics:\n")
+cat("Accuracy: ", round(accuracy_gb, 4), "\n")
+cat("AUC-ROC: ", auc_gb, "\n")
+cat("Precision: ", round(conf_matrix_gb$byClass["Pos Pred Value"], 4), "\n")
+cat("Recall: ", round(conf_matrix_gb$byClass["Sensitivity"], 4), "\n")
+cat("F1-Score: ", round(conf_matrix_gb$byClass["F1"], 4), "\n")
+
+# Feature importance
+cat("\nTop 10 Important Features:\n")
+summary_gb <- summary(model_gb, plotit = FALSE)
+print(head(summary_gb, 10))
+
+# ============================================================================
+# SECTION 8: MODEL COMPARISON
+# ============================================================================
+
+cat("\n========================================\n")
+cat("MODEL COMPARISON SUMMARY\n")
+cat("========================================\n")
+
+comparison_df <- data.frame(
+  Model = c("Logistic Regression", "Naive Bayes", "LASSO",
+            "Random Forest", "Gradient Boosting"),
+  Accuracy = c(
+    round(accuracy_lr, 4),
+    round(accuracy_nb, 4),
+    round(1 - mean_test_error, 4),
+    round(sum(diag(conf_test_rf$table)) / sum(conf_test_rf$table), 4),
+    round(accuracy_gb, 4)
+  ),
+  Sensitivity = c(
+    round(sensitivity_lr, 4),
+    round(conf_matrix_nb$byClass["Sensitivity"], 4),
+    NA,
+    round(conf_test_rf$byClass["Sensitivity"], 4),
+    round(conf_matrix_gb$byClass["Sensitivity"], 4)
+  ),
+  Specificity = c(
+    round(specificity_lr, 4),
+    round(conf_matrix_nb$byClass["Specificity"], 4),
+    NA,
+    round(conf_test_rf$byClass["Specificity"], 4),
+    NA
+  ),
+  F1_Score = c(
+    round(f1_lr, 4),
+    round(conf_matrix_nb$byClass["F1"], 4),
+    NA,
+    round(conf_test_rf$byClass["F1"], 4),
+    round(conf_matrix_gb$byClass["F1"], 4)
+  )
+)
+
+print(comparison_df)
+
+# ============================================================================
+# END OF ANALYSIS
+# ============================================================================
